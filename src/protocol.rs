@@ -1,4 +1,5 @@
 use genai_types::Message;
+use mcp_protocol::tool::Tool;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -27,6 +28,34 @@ pub struct McpError {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct McpServer {
+    pub actor_id: Option<String>,
+    #[serde(flatten)]
+    pub config: McpConfig,
+    pub tools: Option<Vec<Tool>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct StdPipeMcpConfig {
+    pub command: String,
+    pub args: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ActorMcpConfig {
+    pub manifest_path: String,
+    pub init_state: Option<Value>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum McpConfig {
+    #[serde(rename = "stdio")]
+    StdPipe(StdPipeMcpConfig),
+    #[serde(rename = "actor")]
+    Actor(ActorMcpConfig),
 }
 
 /// Messages received by the chat-state actor
