@@ -11,7 +11,7 @@ use bindings::theater::simple::supervisor::spawn;
 use bindings::theater::simple::types::{ChannelAccept, ChannelId, WitActorError};
 use genai_types::{Message, MessageContent, messages::Role};
 use serde::{Deserialize, Serialize};
-use serde_json::{from_slice, to_vec, Value};
+use serde_json::{Value, from_slice, to_vec};
 
 struct Component;
 
@@ -43,18 +43,18 @@ struct TaskManagerConfig {
     // Core task definition
     system_prompt: Option<String>,
     initial_message: Option<String>,
-    
-    // AI configuration  
+
+    // AI configuration
     model_config: Option<Value>,
     temperature: Option<f64>,
     max_tokens: Option<u32>,
-    
+
     // Tool configuration
     mcp_servers: Option<Value>,
-    
+
     // Execution mode
     auto_exit_on_completion: Option<bool>,
-    
+
     #[serde(flatten)]
     other: Value,
 }
@@ -87,11 +87,7 @@ struct TaskManagerState {
 }
 
 impl TaskManagerState {
-    fn new(
-        actor_id: String,
-        config: Value,
-        initial_message: Option<String>,
-    ) -> Self {
+    fn new(actor_id: String, config: Value, initial_message: Option<String>) -> Self {
         Self {
             actor_id,
             chat_state_actor_id: None,
@@ -159,8 +155,8 @@ impl Guest for Component {
         }
 
         // Serialize our state
-        let state_bytes = to_vec(&task_state)
-            .map_err(|e| format!("Failed to serialize task state: {}", e))?;
+        let state_bytes =
+            to_vec(&task_state).map_err(|e| format!("Failed to serialize task state: {}", e))?;
 
         log("Task manager actor initialized successfully");
         Ok((Some(state_bytes),))
@@ -215,7 +211,10 @@ impl SupervisorHandlers for Component {
         params: (String,),
     ) -> Result<(Option<Vec<u8>>,), String> {
         let (child_id,) = params;
-        log(&format!("Task manager: Child actor externally stopped: {}", child_id));
+        log(&format!(
+            "Task manager: Child actor externally stopped: {}",
+            child_id
+        ));
         Ok((state,))
     }
 }
@@ -246,18 +245,16 @@ impl MessageServerClient for Component {
 
         // Forward the message to the chat state actor
         match parsed_state.get_chat_state_actor_id() {
-            Ok(chat_actor_id) => {
-                match send(chat_actor_id, &data) {
-                    Ok(_) => {
-                        log("Message forwarded to chat state actor");
-                    }
-                    Err(e) => {
-                        let error_msg = format!("Failed to forward message: {:?}", e);
-                        log(&error_msg);
-                        return Err(error_msg);
-                    }
+            Ok(chat_actor_id) => match send(chat_actor_id, &data) {
+                Ok(_) => {
+                    log("Message forwarded to chat state actor");
                 }
-            }
+                Err(e) => {
+                    let error_msg = format!("Failed to forward message: {:?}", e);
+                    log(&error_msg);
+                    return Err(error_msg);
+                }
+            },
             Err(e) => {
                 let error_msg = format!("Chat state actor not available: {}", e);
                 log(&error_msg);
@@ -284,20 +281,14 @@ impl MessageServerClient for Component {
                     let error_msg = format!("Failed to deserialize task state: {}", e);
                     log(&error_msg);
                     let error_response = TaskManagerResponse::Error { message: error_msg };
-                    return Ok((
-                        None,
-                        (Some(to_vec(&error_response).unwrap_or_default()),),
-                    ));
+                    return Ok((None, (Some(to_vec(&error_response).unwrap_or_default()),)));
                 }
             },
             None => {
                 let error_response = TaskManagerResponse::Error {
                     message: "No state available".to_string(),
                 };
-                return Ok((
-                    None,
-                    (Some(to_vec(&error_response).unwrap_or_default()),),
-                ));
+                return Ok((None, (Some(to_vec(&error_response).unwrap_or_default()),)));
             }
         };
 
@@ -335,20 +326,35 @@ impl MessageServerClient for Component {
 
                     match task_state.get_chat_state_actor_id() {
                         Ok(chat_actor_id) => {
-                            let add_message_request = protocol::ChatStateRequest::AddMessage { message };
+                            let add_message_request =
+                                protocol::ChatStateRequest::AddMessage { message };
                             match to_vec(&add_message_request) {
-                                Ok(request_data) => {
-                                    match send(chat_actor_id, &request_data) {
-                                        Ok(_) => {
-                                            log("Initial message sent successfully");
-                                        }
-                                        Err(e) => {
-                                            log(&format!("Failed to send initial message: {:?}", e));
-                                        }
+                                Ok(request_data) => match send(chat_actor_id, &request_data) {
+                                    Ok(_) => {
+                                        log("Initial message sent successfully");
                                     }
-                                }
+                                    Err(e) => {
+                                        log(&format!("Failed to send initial message: {:?}", e));
+                                    }
+                                },
                                 Err(e) => {
                                     log(&format!("Failed to serialize initial message: {}", e));
+                                }
+                            }
+
+                            let generate_response_request =
+                                protocol::ChatStateRequest::GenerateCompletion;
+                            match to_vec(&generate_response_request) {
+                                Ok(request_data) => match send(chat_actor_id, &request_data) {
+                                    Ok(_) => {
+                                        log("Generate completion request sent to chat state actor");
+                                    }
+                                    Err(e) => {
+                                        log(&format!("Failed to send generate request: {:?}", e));
+                                    }
+                                },
+                                Err(e) => {
+                                    log(&format!("Failed to serialize generate request: {}", e));
                                 }
                             }
                         }
@@ -372,22 +378,21 @@ impl MessageServerClient for Component {
             TaskManagerRequest::AddMessage { message } => {
                 match task_state.get_chat_state_actor_id() {
                     Ok(chat_actor_id) => {
-                        let add_message_request = protocol::ChatStateRequest::AddMessage { message };
+                        let add_message_request =
+                            protocol::ChatStateRequest::AddMessage { message };
 
                         match to_vec(&add_message_request) {
-                            Ok(request_data) => {
-                                match send(chat_actor_id, &request_data) {
-                                    Ok(_) => {
-                                        log("Message forwarded to chat state actor");
-                                        TaskManagerResponse::Success
-                                    }
-                                    Err(e) => {
-                                        let error_msg = format!("Failed to forward message: {:?}", e);
-                                        log(&error_msg);
-                                        TaskManagerResponse::Error { message: error_msg }
-                                    }
+                            Ok(request_data) => match send(chat_actor_id, &request_data) {
+                                Ok(_) => {
+                                    log("Message forwarded to chat state actor");
+                                    TaskManagerResponse::Success
                                 }
-                            }
+                                Err(e) => {
+                                    let error_msg = format!("Failed to forward message: {:?}", e);
+                                    log(&error_msg);
+                                    TaskManagerResponse::Error { message: error_msg }
+                                }
+                            },
                             Err(e) => {
                                 let error_msg = format!("Failed to serialize message: {}", e);
                                 log(&error_msg);
@@ -401,8 +406,8 @@ impl MessageServerClient for Component {
         };
 
         // Serialize response and return
-        let response_data = to_vec(&response)
-            .map_err(|e| format!("Failed to serialize response: {}", e))?;
+        let response_data =
+            to_vec(&response).map_err(|e| format!("Failed to serialize response: {}", e))?;
         let updated_state_bytes =
             to_vec(&task_state).map_err(|e| format!("Failed to serialize current state: {}", e))?;
 
@@ -415,7 +420,13 @@ impl MessageServerClient for Component {
     ) -> Result<(Option<Vec<u8>>, (ChannelAccept,)), String> {
         let (_channel_id, _data) = params;
         log("Task manager: Channel open request");
-        Ok((state, (ChannelAccept { accepted: true, message: None },)))
+        Ok((
+            state,
+            (ChannelAccept {
+                accepted: true,
+                message: None,
+            },),
+        ))
     }
 
     fn handle_channel_close(
@@ -423,10 +434,7 @@ impl MessageServerClient for Component {
         params: (ChannelId,),
     ) -> Result<(Option<Vec<u8>>,), String> {
         let (channel_id,) = params;
-        log(&format!(
-            "Task manager: Channel closed: {}",
-            channel_id
-        ));
+        log(&format!("Task manager: Channel closed: {}", channel_id));
         Ok((state,))
     }
 
@@ -526,7 +534,10 @@ fn spawn_chat_state_actor(config: &Value) -> Result<String, String> {
 
     match spawn(CHAT_STATE_MANIFEST_PATH, Some(&config_bytes)) {
         Ok(actor_id) => {
-            log(&format!("Successfully spawned chat-state actor: {}", actor_id));
+            log(&format!(
+                "Successfully spawned chat-state actor: {}",
+                actor_id
+            ));
             Ok(actor_id)
         }
         Err(e) => {
@@ -537,5 +548,5 @@ fn spawn_chat_state_actor(config: &Value) -> Result<String, String> {
     }
 }
 
-
 bindings::export!(Component with_types_in bindings);
+
