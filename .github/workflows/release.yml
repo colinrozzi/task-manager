@@ -1,0 +1,71 @@
+name: Release Theater Actor
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v0.1.0, v1.2.3, etc.
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Build and prepare release
+        uses: ./.github/actions/release-actor
+        
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            component.wasm
+            manifest.toml
+            init.json
+          body: |
+            ## 🎭 ${{ github.event.repository.name }} ${{ steps.version.outputs.VERSION }}
+            
+            This release contains the WebAssembly component and configuration files for the **${{ github.event.repository.name }}** actor.
+            
+            ### 📦 What's Included
+            - `component.wasm` - The compiled WebAssembly actor component
+            - `manifest.toml` - Actor manifest with GitHub release URLs
+            - `init.json` - Initial state configuration (if applicable)
+            
+            ### 🚀 Quick Start
+            
+            **Prerequisites:**
+            - Install and configure the `theater` CLI tool
+            - Ensure `theater-server-cli` is running
+            
+            **Run the actor:**
+            ```bash
+            theater start https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/manifest.toml
+            ```
+            
+            ### 🔗 Manifest URL
+            ```
+            https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/manifest.toml
+            ```
+            
+            ### 📖 About
+            This is a theater actor built with Rust and compiled to WebAssembly. It can be deployed and managed within the theater actor system for distributed computing tasks.
+            
+            For more details about this actor's capabilities, check the repository documentation.
+            
+            ---
+            
+            **Repository:** [${{ github.repository }}](https://github.com/${{ github.repository }})  
+            **Release:** ${{ steps.version.outputs.VERSION }}  
+            **Build:** [${{ github.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
