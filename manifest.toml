@@ -1,6 +1,7 @@
 name = "task-manager"
 version = "0.1.0"
 component = "/Users/colinrozzi/work/actor-registry/task-manager/./target/wasm32-unknown-unknown/release/task_manager.wasm"
+save_chain = true
 
 [permission_policy.message_server]
 type = "inherit"
