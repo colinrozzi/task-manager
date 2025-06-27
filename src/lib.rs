@@ -10,6 +10,7 @@ use bindings::theater::simple::runtime::{log, shutdown};
 use bindings::theater::simple::supervisor::spawn;
 use bindings::theater::simple::types::{ChannelAccept, ChannelId, WitActorError};
 use genai_types::{Message, MessageContent, messages::Role};
+use protocol::{ActorMcpConfig, McpConfig, McpServer};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, from_slice, to_vec};
 
@@ -17,7 +18,7 @@ struct Component;
 
 const CHAT_STATE_MANIFEST_PATH: &str =
     "/Users/colinrozzi/work/actor-registry/chat-state/manifest.toml";
-const DEFAULT_TASK_MONITOR_MANIFEST_PATH: &str =
+const TASK_MONITOR_MANIFEST_PATH: &str =
     "https://github.com/colinrozzi/task-monitor-mcp-actor/releases/latest/download/manifest.toml";
 
 // Protocol types for external communication
@@ -50,7 +51,7 @@ struct TaskManagerConfig {
     max_tokens: Option<u32>,
 
     // Tool configuration
-    mcp_servers: Option<Value>,
+    mcp_servers: Option<Vec<McpServer>>,
 
     // Execution mode
     auto_exit_on_completion: Option<bool>,
@@ -84,15 +85,22 @@ struct TaskManagerState {
     chat_state_actor_id: Option<String>,
     original_config: Value,
     initial_message: Option<String>,
+    exit_on_completion: bool,
 }
 
 impl TaskManagerState {
-    fn new(actor_id: String, config: Value, initial_message: Option<String>) -> Self {
+    fn new(
+        actor_id: String,
+        config: Value,
+        initial_message: Option<String>,
+        exit_on_completion: bool,
+    ) -> Self {
         Self {
             actor_id,
             chat_state_actor_id: None,
             original_config: config,
             initial_message,
+            exit_on_completion,
         }
     }
 
@@ -110,16 +118,25 @@ impl TaskManagerState {
 impl Guest for Component {
     fn init(state: Option<Vec<u8>>, params: (String,)) -> Result<(Option<Vec<u8>>,), String> {
         log("Task manager actor initializing...");
+        log(&format!("Received parameters: {:?}", params));
+        log(&format!(
+            "Initial state: {}",
+            String::from_utf8_lossy(&state.clone().unwrap_or_default())
+        ));
 
         let (self_id,) = params;
 
         // Parse initial configuration if provided
-        let (task_config, initial_message) = if let Some(state_bytes) = state {
+        let (task_config, initial_message, exit_on_completion) = if let Some(state_bytes) = state {
             match from_slice::<TaskManagerConfig>(&state_bytes) {
                 Ok(config) => {
                     log("Parsed initial configuration");
                     let task_config = create_task_config(&self_id, &config);
-                    (task_config, config.initial_message)
+                    (
+                        task_config,
+                        config.initial_message,
+                        config.auto_exit_on_completion.unwrap_or(false),
+                    )
                 }
                 Err(e) => {
                     log(&format!(
@@ -127,19 +144,24 @@ impl Guest for Component {
                         e
                     ));
                     let task_config = create_task_config(&self_id, &TaskManagerConfig::default());
-                    (task_config, None)
+                    (task_config, None, false)
                 }
             }
         } else {
             log("No initial state provided, using default configuration");
             let task_config = create_task_config(&self_id, &TaskManagerConfig::default());
-            (task_config, None)
+            (task_config, None, false)
         };
 
         log(&format!("Using task config: {}", task_config));
 
         // Create our state
-        let mut task_state = TaskManagerState::new(self_id, task_config.clone(), initial_message);
+        let mut task_state = TaskManagerState::new(
+            self_id,
+            task_config.clone(),
+            initial_message,
+            exit_on_completion,
+        );
 
         // Spawn the chat-state actor with the task config
         match spawn_chat_state_actor(&task_config) {
@@ -242,6 +264,24 @@ impl MessageServerClient for Component {
                 return Err(error_msg);
             }
         };
+
+        // If the message is a Task Complete message, handle it here.
+        // Otherwise, pass it along to the chat state actor.
+        match from_slice::<TaskComplete>(&data) {
+            Ok(_) => {
+                log("Received TaskComplete message, handling completion");
+                // If auto exit is enabled, shutdown the task manager
+                if parsed_state.exit_on_completion {
+                    log("Auto exit on completion is enabled, shutting down task manager");
+                    let _ = shutdown(None);
+                } else {
+                    log("Task completed, but auto exit is disabled");
+                }
+            }
+            Err(_) => {
+                log("Received non-TaskComplete message, forwarding to chat state actor");
+            }
+        }
 
         // Forward the message to the chat state actor
         match parsed_state.get_chat_state_actor_id() {
@@ -482,35 +522,43 @@ fn create_task_config(self_id: &str, config: &TaskManagerConfig) -> Value {
     // Default temperature and tokens
     let temperature = config.temperature.unwrap_or(0.7);
     let max_tokens = config.max_tokens.unwrap_or(8192);
+    let title = config
+        .other
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("Task");
 
-    // Default MCP servers (just task monitor)
-    let default_mcp_servers = serde_json::json!([
-        {
-            "actor_id": null,
-            "actor": {
-                "manifest_path": DEFAULT_TASK_MONITOR_MANIFEST_PATH,
-                "init_state": {
-                    "management_actor": self_id,
-                }
-            },
-            "tools": null
-        }
-    ]);
+    let task_mcp_server = McpServer {
+        actor_id: None,
+        config: McpConfig::Actor(ActorMcpConfig {
+            manifest_path: TASK_MONITOR_MANIFEST_PATH.to_string(),
+            init_state: Some(serde_json::json!({
+                "management_actor": self_id,
+            })),
+        }),
+        tools: None,
+    };
 
-    let mcp_servers = config.mcp_servers.as_ref().unwrap_or(&default_mcp_servers);
+    let mut mcp_servers: Vec<McpServer> = config.mcp_servers.clone().unwrap_or(vec![]).to_vec();
+    mcp_servers.append(&mut vec![task_mcp_server]);
 
+    log(&format!("Using MCP servers: {:?}", mcp_servers));
     log(&format!("Using model: {:?}", model_config));
     log(&format!("Using temperature: {}", temperature));
     log(&format!("Using max_tokens: {}", max_tokens));
 
     // Build the final configuration
     let mut final_config = serde_json::json!({
-        "model_config": model_config,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "system_prompt": final_system_prompt,
-        "mcp_servers": mcp_servers
-    });
+            "config": {
+                "model_config": model_config,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "system_prompt": final_system_prompt,
+                "title": title,
+                "mcp_servers": mcp_servers
+            }
+        }
+    );
 
     // Merge any additional fields from the other config
     if let Some(obj) = final_config.as_object_mut() {
@@ -549,4 +597,3 @@ fn spawn_chat_state_actor(config: &Value) -> Result<String, String> {
 }
 
 bindings::export!(Component with_types_in bindings);
-
