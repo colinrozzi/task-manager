@@ -113,6 +113,7 @@ name = "task-manager"
 version = "0.1.0"
 dependencies = [
  "genai-types",
+ "mcp-protocol",
  "serde",
  "serde_json",
  "wit-bindgen-rt",
