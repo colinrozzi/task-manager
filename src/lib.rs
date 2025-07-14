@@ -46,7 +46,7 @@ struct TaskManagerConfig {
     initial_message: Option<String>,
 
     // AI configuration
-    model_config: Option<Value>,
+    model_proxy: Option<Value>,
     temperature: Option<f64>,
     max_tokens: Option<u32>,
 
@@ -65,7 +65,7 @@ impl Default for TaskManagerConfig {
         Self {
             system_prompt: None,
             initial_message: None,
-            model_config: None,
+            model_proxy: None,
             temperature: None,
             max_tokens: None,
             mcp_servers: None,
@@ -509,15 +509,12 @@ fn create_task_config(self_id: &str, config: &TaskManagerConfig) -> Value {
     let final_system_prompt = format!("{}{}", system_prompt, completion_instruction);
 
     // Default model config
-    let default_model_config = serde_json::json!({
-        "model": "claude-sonnet-4-20250514",
-        "provider": "anthropic"
+    let default_model_proxy = serde_json::json!({
+        "manifest_path": "https://github.com/colinrozzi/google-proxy/releases/latest/download/manifest.toml",
+        "model": "gemini-2.0-flash",
     });
 
-    let model_config = config
-        .model_config
-        .as_ref()
-        .unwrap_or(&default_model_config);
+    let model_proxy = config.model_proxy.as_ref().unwrap_or(&default_model_proxy);
 
     // Default temperature and tokens
     let temperature = config.temperature.unwrap_or(0.7);
@@ -543,14 +540,14 @@ fn create_task_config(self_id: &str, config: &TaskManagerConfig) -> Value {
     mcp_servers.append(&mut vec![task_mcp_server]);
 
     log(&format!("Using MCP servers: {:?}", mcp_servers));
-    log(&format!("Using model: {:?}", model_config));
+    log(&format!("Using model: {:?}", model_proxy));
     log(&format!("Using temperature: {}", temperature));
     log(&format!("Using max_tokens: {}", max_tokens));
 
     // Build the final configuration
     let mut final_config = serde_json::json!({
             "config": {
-                "model_config": model_config,
+                "model_proxy": model_proxy,
                 "temperature": temperature,
                 "max_tokens": max_tokens,
                 "system_prompt": final_system_prompt,
